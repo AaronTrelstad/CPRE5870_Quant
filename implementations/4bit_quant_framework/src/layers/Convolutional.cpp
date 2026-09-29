@@ -38,24 +38,13 @@ namespace ML {
         fp32 inv_scale = 1.0f / (Si * Sw);
         fp32* output = (fp32*)getOutputData().raw();
 
-        // Accumulator buffer
-        std::vector<i32> acc(P * Q * M);
-        i32* acc_ptr = acc.data();
-
-        // Initialize accumulators with quantized bias
+        // Local accumulator eliminates alias check
+        ActivationType act = getActivationType();
         for (size p = 0; p < P; p++) {
             for (size q = 0; q < Q; q++) {
-                i32* a = acc_ptr + p * Q * M + q * M;
-                for (size m = 0; m < M; m++) {
-                    a[m] = qb_ptr[m];
-                }
-            }
-        }
+                i32 acc[128];
+                for (size m = 0; m < M; m++) acc[m] = qb_ptr[m];
 
-        // Cache-friendly loop order: p→q→r→s→c→m
-        for (size p = 0; p < P; p++) {
-            for (size q = 0; q < Q; q++) {
-                i32* a = acc_ptr + p * Q * M + q * M;
                 for (size r = 0; r < R; r++) {
                     for (size s = 0; s < S; s++) {
                         const i8* in_row = qi_ptr + (p * U + r) * W * C + (q * U + s) * C;
@@ -64,21 +53,17 @@ namespace ML {
                             i32 in_val = (i32)in_row[c];
                             const i8* w_row = w_base + c * M;
                             for (size m = 0; m < M; m++) {
-                                a[m] += in_val * (i32)w_row[m];
+                                acc[m] += in_val * (i32)w_row[m];
                             }
                         }
                     }
                 }
-            }
-        }
 
-        // Dequantize and apply activation
-        ActivationType act = getActivationType();
-        for (size pq = 0; pq < P * Q; pq++) {
-            size idx = pq * M;
-            for (size m = 0; m < M; m++) {
-                fp32 result = (fp32)(acc_ptr[idx + m] - zi * sum_qw_ptr[m]) * inv_scale;
-                output[idx + m] = Activation::apply(result, act);
+                fp32* out_ptr = output + p * Q * M + q * M;
+                for (size m = 0; m < M; m++) {
+                    fp32 result = (fp32)(acc[m] - zi * sum_qw_ptr[m]) * inv_scale;
+                    out_ptr[m] = Activation::apply(result, act);
+                }
             }
         }
     }

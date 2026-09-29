@@ -5,14 +5,26 @@ namespace ML {
         size in_size = getInputParams().flat_count();
         size out_size = getOutputParams().flat_count();
 
-        for (size o = 0; o < out_size; o++) {
-            fp32 sum = biasData.get<fp32>(o);
+        const fp32* input = (const fp32*)dataIn.raw();
+        const fp32* weights = (const fp32*)weightData.raw();
+        const fp32* biases = (const fp32*)biasData.raw();
+        fp32* output = (fp32*)getOutputData().raw();
+        ActivationType act = getActivationType();
 
-            for (size i = 0; i < in_size; i++) {
-                sum += dataIn.get<fp32>(i) * weightData.get<fp32>(i * out_size + o);
+        // Local accumulator, loop order i→o for sequential weight access
+        fp32 acc[256];
+        for (size o = 0; o < out_size; o++) acc[o] = biases[o];
+
+        for (size i = 0; i < in_size; i++) {
+            fp32 in_val = input[i];
+            const fp32* w_row = weights + i * out_size;
+            for (size o = 0; o < out_size; o++) {
+                acc[o] += in_val * w_row[o];
             }
+        }
 
-            getOutputData().get<fp32>(o) = Activation::apply(sum, getActivationType());
+        for (size o = 0; o < out_size; o++) {
+            output[o] = Activation::apply(acc[o], act);
         }
     }
 

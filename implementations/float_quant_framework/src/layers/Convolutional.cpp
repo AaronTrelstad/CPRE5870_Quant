@@ -12,7 +12,6 @@ namespace ML {
         size R = weight_dims[0], S = weight_dims[1];
         size U = (H - R) / (P - 1);
 
-        // Pull out raw pointers ONCE — no accessor overhead in the hot loop
         const fp32* input = (const fp32*)dataIn.raw();
         const fp32* weights = (const fp32*)getWeightData().raw();
         const fp32* biases = (const fp32*)getBiasData().raw();
@@ -29,7 +28,7 @@ namespace ML {
         }
 
         // Cache-friendly loop order: p→q→r→s→c→m
-        // Using raw pointers so the compiler can prove no aliasing and auto-vectorize
+        // m innermost = sequential weight access, enables auto-vectorization
         for (size p = 0; p < P; p++) {
             for (size q = 0; q < Q; q++) {
                 fp32* out_ptr = output + p * Q * M + q * M;
@@ -40,8 +39,6 @@ namespace ML {
                         for (size c = 0; c < C; c++) {
                             fp32 in_val = in_ptr[c];
                             const fp32* w_row = w_ptr + c * M;
-                            // m is innermost — sequential weight access
-                            // compiler can now vectorize this (no aliasing ambiguity)
                             for (size m = 0; m < M; m++) {
                                 out_ptr[m] += in_val * w_row[m];
                             }

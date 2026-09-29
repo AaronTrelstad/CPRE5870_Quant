@@ -14,7 +14,6 @@ namespace ML {
         size R = weight_dims[0], S = weight_dims[1];
         size U = (H - R) / (P - 1);
         size in_count = getInputParams().flat_count();
-        size out_count = getOutputParams().flat_count();
 
         // Quantize input
         std::vector<i8> qi;
@@ -29,22 +28,21 @@ namespace ML {
             (const fp32*)getBiasData().raw(), M, Sb, qb
         );
 
-        // Raw pointers — no accessor overhead, enables auto-vectorization
         const i8* qw_ptr = getQuantizedWeights().data();
         const i8* qi_ptr = qi.data();
-        const i32* sum_qw_ptr = getWeightSums().data();
         const i32* qb_ptr = qb.data();
+        const i32* sum_qw_ptr = getWeightSums().data();
         fp32 Sw = getWeightScale();
         fp32 Si = iParams.scale;
         i32 zi = (i32)iParams.zero_point;
         fp32 inv_scale = 1.0f / (Si * Sw);
         fp32* output = (fp32*)getOutputData().raw();
 
-        // Accumulator buffer (local, no aliasing with anything)
-        std::vector<i32> acc(out_count);
+        // Accumulator buffer
+        std::vector<i32> acc(P * Q * M);
         i32* acc_ptr = acc.data();
 
-        // Initialize accumulators with bias
+        // Initialize accumulators with quantized bias
         for (size p = 0; p < P; p++) {
             for (size q = 0; q < Q; q++) {
                 i32* a = acc_ptr + p * Q * M + q * M;
@@ -54,7 +52,7 @@ namespace ML {
             }
         }
 
-        // Cache-friendly loop: p→q→r→s→c→m (m innermost = sequential weight access)
+        // Cache-friendly loop order: p→q→r→s→c→m
         for (size p = 0; p < P; p++) {
             for (size q = 0; q < Q; q++) {
                 i32* a = acc_ptr + p * Q * M + q * M;
@@ -74,12 +72,14 @@ namespace ML {
             }
         }
 
-        // Dequantize and apply activation — write directly to output
-        for (size idx = 0; idx < out_count; idx++) {
-            // Figure out which output channel this index belongs to
-            size m = idx % M;
-            fp32 result = (fp32)(acc_ptr[idx] - zi * sum_qw_ptr[m]) * inv_scale;
-            output[idx] = Activation::apply(result, getActivationType());
+        // Dequantize and apply activation
+        ActivationType act = getActivationType();
+        for (size pq = 0; pq < P * Q; pq++) {
+            size idx = pq * M;
+            for (size m = 0; m < M; m++) {
+                fp32 result = (fp32)(acc_ptr[idx + m] - zi * sum_qw_ptr[m]) * inv_scale;
+                output[idx + m] = Activation::apply(result, act);
+            }
         }
     }
 

@@ -28,10 +28,13 @@ namespace ML {
         }
 
         // Cache-friendly loop order: p→q→r→s→c→m
-        // m innermost = sequential weight access, enables auto-vectorization
+        // Local accumulator eliminates alias check between output and weights
+        ActivationType act = getActivationType();
         for (size p = 0; p < P; p++) {
             for (size q = 0; q < Q; q++) {
-                fp32* out_ptr = output + p * Q * M + q * M;
+                fp32 acc[128];
+                for (size m = 0; m < M; m++) acc[m] = biases[m];
+
                 for (size r = 0; r < R; r++) {
                     for (size s = 0; s < S; s++) {
                         const fp32* in_ptr = input + (p * U + r) * W * C + (q * U + s) * C;
@@ -40,20 +43,20 @@ namespace ML {
                             fp32 in_val = in_ptr[c];
                             const fp32* w_row = w_ptr + c * M;
                             for (size m = 0; m < M; m++) {
-                                out_ptr[m] += in_val * w_row[m];
+                                acc[m] += in_val * w_row[m];
                             }
                         }
                     }
                 }
-            }
-        }
 
-        // Apply activation
-        ActivationType act = getActivationType();
-        if (act != ActivationType::NONE) {
-            size out_count = P * Q * M;
-            for (size i = 0; i < out_count; i++) {
-                output[i] = Activation::apply(output[i], act);
+                fp32* out_ptr = output + p * Q * M + q * M;
+                if (act != ActivationType::NONE) {
+                    for (size m = 0; m < M; m++)
+                        out_ptr[m] = Activation::apply(acc[m], act);
+                } else {
+                    for (size m = 0; m < M; m++)
+                        out_ptr[m] = acc[m];
+                }
             }
         }
     }
